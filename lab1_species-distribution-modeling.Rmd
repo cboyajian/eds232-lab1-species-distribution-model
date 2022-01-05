@@ -33,7 +33,7 @@ dir.create(dir_data, showWarnings = F)
 ```{r}
 obs_csv <- file.path(dir_data, "obs.csv")
 obs_geo <- file.path(dir_data, "obs.geojson")
-redo    <- FALSE
+redo    <- TRUE
 
 if (!file.exists(obs_geo) | redo){
   # get species occurrence data from GBIF with coordinates
@@ -52,9 +52,10 @@ if (!file.exists(obs_geo) | redo){
     sf::st_as_sf(
       coords = c("longitude", "latitude"),
       crs = st_crs(4326)) %>% 
-    select(prov, key) # save space (joinable from obs_csv)
+    select(prov, key) %>%  # save space (joinable from obs_csv)
+    filter(key != "3061712649") # remove single observation in ocean near Europe
   
-  sf::write_sf(obs, obs_geo, delete_dsn=T)
+  sf::write_sf(obs, obs_geo, delete_dsn = T)
 }
 
 obs <- sf::read_sf(obs_geo)

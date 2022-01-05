@@ -7079,7 +7079,6 @@
 { "type": "Feature", "properties": { "prov": "gbif", "key": "3061710817" }, "geometry": { "type": "Point", "coordinates": [ -88.365736, 43.105253 ] } },
 { "type": "Feature", "properties": { "prov": "gbif", "key": "3061710922" }, "geometry": { "type": "Point", "coordinates": [ -120.002625, 37.386545 ] } },
 { "type": "Feature", "properties": { "prov": "gbif", "key": "3061711646" }, "geometry": { "type": "Point", "coordinates": [ -118.610523, 34.361132 ] } },
-{ "type": "Feature", "properties": { "prov": "gbif", "key": "3061712649" }, "geometry": { "type": "Point", "coordinates": [ 20.180103, 71.495194 ] } },
 { "type": "Feature", "properties": { "prov": "gbif", "key": "3061713897" }, "geometry": { "type": "Point", "coordinates": [ -121.839457, 37.962616 ] } },
 { "type": "Feature", "properties": { "prov": "gbif", "key": "3061714645" }, "geometry": { "type": "Point", "coordinates": [ -92.057549, 45.494677 ] } },
 { "type": "Feature", "properties": { "prov": "gbif", "key": "3061715672" }, "geometry": { "type": "Point", "coordinates": [ -81.536562, 41.124237 ] } },
