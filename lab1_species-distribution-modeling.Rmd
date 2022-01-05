@@ -50,7 +50,8 @@ nrow(df) # number of rows
 obs <- df %>% 
   sf::st_as_sf(
     coords = c("longitude", "latitude"),
-    crs = st_crs(4326))
+    crs = st_crs(4326)) %>% 
+  select(geometry)
 
 readr::write_csv(df, obs_csv)
 sf::write_sf(obs, obs_geo)
