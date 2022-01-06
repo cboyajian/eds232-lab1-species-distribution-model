@@ -33,7 +33,7 @@ dir.create(dir_data, showWarnings = F)
 ```{r}
 obs_csv <- file.path(dir_data, "obs.csv")
 obs_geo <- file.path(dir_data, "obs.geojson")
-redo    <- TRUE
+redo    <- FALSE
 
 if (!file.exists(obs_geo) | redo){
   # get species occurrence data from GBIF with coordinates
@@ -69,7 +69,7 @@ mapview::mapview(obs, map.types = "Esri.WorldStreetMap")
 
 #### Questions:
 Q1: 7,004,434
-Q2: 
+Q2: Removed data point with key = "3061712649" as it was in the ocean near Europe. I checked to see if there was a missing negative sign, but that did not put the point in a location that made sense. I also checked to see if the lat and lon had accidentally been reversed, but that also did not put the point in a location that made sense. 
 
 
 ## Get Environmental Data
