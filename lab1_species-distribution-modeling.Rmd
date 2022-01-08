@@ -24,7 +24,7 @@ set.seed(42)
 
 # directory to store data
 dir_data <- here("data/sdm")
-dir.create(dir_data, showWarnings = F)
+dir.create(dir_data, showWarnings = F, recursive = TRUE)
 ```
 
 
@@ -49,11 +49,13 @@ if (!file.exists(obs_geo) | redo){
 
   # convert to points of observation from lon/lat columns in data frame
   obs <- df %>% 
+    # limit observations to bounding box around north and central america
+    filter(between(longitude, -167.593385, -51.171266),
+           between(latitude, 5.645215, 71.374349)) %>% 
     sf::st_as_sf(
       coords = c("longitude", "latitude"),
       crs = st_crs(4326)) %>% 
-    select(prov, key) %>%  # save space (joinable from obs_csv)
-    filter(key != "3061712649") # remove single observation in ocean near Europe
+    select(prov, key) #%>%  # save space (joinable from obs_csv)
   
   sf::write_sf(obs, obs_geo, delete_dsn = T)
 }
@@ -176,6 +178,53 @@ absence <- read_sf(absence_geo)
 # show map of presence, ie obs, and absence
 mapview(obs, col.regions = "green") + 
   mapview(absence, col.regions = "gray")
+```
+
+```{r}
+if (!file.exists(pts_env_csv) | redo){
+
+  # combine presence and absence into single set of labeled points 
+  pts <- rbind(
+    obs %>% 
+      mutate(
+        present = 1) %>% 
+      select(present, key),
+    absence %>% 
+      mutate(
+        present = 0,
+        key     = NA)) %>% 
+    mutate(
+      ID = 1:n()) %>% 
+    relocate(ID)
+  write_sf(pts, pts_geo, delete_dsn=T)
+
+  # extract raster values for points
+  pts_env <- raster::extract(env_stack, as_Spatial(pts), df=TRUE) %>% 
+    tibble() %>% 
+    # join present and geometry columns to raster value results for points
+    left_join(
+      pts %>% 
+        select(ID, present),
+      by = "ID") %>% 
+    relocate(present, .after = ID) %>% 
+    # extract lon, lat as single columns
+    mutate(
+      #present = factor(present),
+      lon = st_coordinates(geometry)[,1],
+      lat = st_coordinates(geometry)[,2]) %>% 
+    select(-geometry)
+  write_csv(pts_env, pts_env_csv)
+}
+pts_env <- read_csv(pts_env_csv)
+
+pts_env %>% 
+  # show first 10 presence, last 10 absence
+  slice(c(1:10, (nrow(pts_env)-9):nrow(pts_env))) %>% 
+  DT::datatable(
+    rownames = F,
+    options = list(
+      dom = "t",
+      pageLength = 20))
 ```
 
 
