@@ -1,0 +1,23 @@
+---
+title: 'Lab 1: Species Distribution Modeling - Logistic Regression'
+author: "Clarissa Boyajian"
+date: "1/7/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+librarian::shelf(DT, tidyverse, dismo, GGally, here)
+select <- dplyr::select # overwrite raster::select
+options(readr.show_col_types = F)
+
+dir_data    <- here("data/sdm")
+pts_env_csv <- file.path(dir_data, "pts_env.csv")
+
+pts_env <- read_csv(pts_env_csv)
+nrow(pts_env)
+```
+
