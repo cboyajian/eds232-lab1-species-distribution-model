@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-librarian::shelf(DT, tidyverse, dismo, GGally, here)
+librarian::shelf(DT, tidyverse, dismo, GGally, here, mgcv, maptools, sf)
 select <- dplyr::select # overwrite raster::select
 options(readr.show_col_types = F)
 
@@ -34,6 +34,108 @@ GGally::ggpairs(
 
 ### Setup Data
 ```{r}
+# setup model data
+d <- pts_env %>% 
+  select(-ID) %>%  # remove terms we don't want to model
+  tidyr::drop_na() # drop rows with NA values
+nrow(d)
+```
 
+### Linear Model
+
+```{r}
+# fit a linear model
+mdl_lm <- lm(present ~ ., data = d)
+summary(mdl_lm)
+```
+
+```{r}
+y_predict_lm <- predict(mdl_lm, pts_env, type = "response")
+y_true    <- pts_env$present
+
+range(y_predict_lm)
+```
+
+```{r}
+range(y_true)
+```
+
+### Generalized Linear Model
+
+```{r}
+# fit a generalized linear model with a binomial logit link function
+mdl_glm <- glm(present ~ ., family = binomial(link="logit"), data = d)
+summary(mdl_glm)
+```
+
+```{r}
+y_predict_glm <- predict(mdl_glm, d, type="response")
+
+range(y_predict_glm)
+```
+
+```{r}
+# show term plots
+termplot(mdl_glm, partial.resid = TRUE, se = TRUE, main = F)
+```
+
+### Generalized Additive Model
+
+```{r}
+# fit a generalized additive model with smooth predictors
+mdl_gam <- mgcv::gam(
+  formula = present ~ s(WC_alt) + s(WC_bio1) + 
+    s(WC_bio2) + s(ER_tri) + s(ER_topoWet) + s(lon) + s(lat), 
+  family = binomial, data = d)
+
+summary(mdl_gam)
+```
+
+```{r}
+# show term plots
+plot(mdl_gam, scale=0)
+```
+
+### Maxent (Maximum Entropy)
+
+```{r}
+# show version of maxent
+maxent()
+```
+
+```{r}
+# get environmental rasters
+env_stack_grd <- file.path(dir_data, "env_stack.grd")
+env_stack <- stack(env_stack_grd)
+plot(env_stack, nc=2)
+```
+
+```{r}
+# get presence-only observation points (maxent extracts raster values for you)
+obs_geo <- file.path(dir_data, "obs.geojson")
+obs_sp <- read_sf(obs_geo) %>% 
+  sf::as_Spatial() # maxent prefers sp::SpatialPoints over newer sf::sf class
+
+# fit a maximum entropy model
+mdl_maxent <- maxent(env_stack, obs_sp)
+```
+
+```{r}
+# plot variable contributions per predictor
+plot(mdl_maxent)
+```
+
+```{r}
+# plot term plots
+response(mdl_maxent)
+```
+
+```{r}
+# predict
+y_predict_maxent <- predict(env_stack, mdl_maxent) #, ext=ext, progress='')
+
+plot(y_predict_maxent, main = 'Maxent, raw prediction')
+data(wrld_simpl, package = "maptools")
+plot(wrld_simpl, add = TRUE, border='dark grey')
 ```
 
