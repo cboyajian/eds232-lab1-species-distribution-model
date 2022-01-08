@@ -249,22 +249,6 @@ pts_env %>%
     legend.position = c(1, 0),
     legend.justification = c(1, 0))
 ```
-## Pairs Plots
-
-```{r}
-GGally::ggpairs(
-  select(pts_env, -ID),
-  aes(color = factor(present)))
-```
-
-
-## Logistic Regression
-
-### Setup Data
-```{r}
-
-```
-
 
 
 
