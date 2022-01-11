@@ -71,6 +71,23 @@ nrow(obs) # number of rows
 mapview::mapview(obs, map.types = "Esri.WorldStreetMap")
 ```
 
+```{r}
+# # find duplicate coordinates, this function creates a vector of T or F for each of the 202 points
+# duplicates <- duplicated(obs$geometry)
+# # how many duplicates were there? This will sum only the TRUE values
+# sum(duplicates)
+# # add duplicates as a col to the obs dataframe to see which rows were duplicates
+# obs_check_dup <- obs %>%
+#   mutate(dups = duplicates)
+# # seems like the duplicates function gives TRUE for all rows that match other rows, not just the second copy of the row, so we need to keep 1 copy and remove only the second copy!
+# obs_no_dup_check <- obs_check_dup %>%
+#   distinct(geometry, .keep_all = TRUE)
+# # remove observations that have fewer than 3 decimal places for either the latitude or longitude
+# obs_clean <- obs_no_dup_check[-c(108, 124, 133, 137, 144, 146, 148), ] %>%
+#   select(prov, key, geometry)
+```
+
+
 #### Questions:
 Q1: 7,004,434
 Q2: Removed data point with key = "3061712649" as it was in the ocean near Europe. I checked to see if there was a missing negative sign, but that did not put the point in a location that made sense. I also checked to see if the lat and lon had accidentally been reversed, but that also did not put the point in a location that made sense. 
