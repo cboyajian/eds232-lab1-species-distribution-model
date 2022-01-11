@@ -61,3 +61,109 @@ table(d$present)
 table(d_train$present)
 ```
 
+
+## Decision Trees
+
+### Partition, depth=1
+
+```{r}
+# run decision stump model
+mdl_dt1 <- rpart(
+  present ~ ., data = d_train, 
+  control = list(
+    cp = 0, minbucket = 5, maxdepth = 1))
+mdl_dt1
+```
+
+```{r}
+# plot tree 
+par(mar = c(1, 1, 1, 1))
+rpart.plot(mdl_dt1)
+```
+
+### Partition, depth=default
+
+```{r}
+# decision tree with defaults
+mdl_dt2 <- rpart(present ~ ., data = d_train)
+mdl_dt2
+```
+
+```{r}
+rpart.plot(mdl_dt2)
+
+# plot complexity parameter
+plotcp(mdl_dt2)
+
+# rpart cross validation results
+mdl_dt2$cptable
+```
+
+### Feature interpretation
+
+```{r}
+# caret cross validation results
+mdl_caret <- train(
+  present ~ .,
+  data       = d_train,
+  method     = "rpart",
+  trControl  = trainControl(method = "cv", number = 10),
+  tuneLength = 20)
+
+ggplot(mdl_caret)
+```
+
+```{r}
+vip(mdl_caret, num_features = 40, bar = FALSE)
+```
+
+```{r}
+# Construct partial dependence plots
+p1 <- partial(mdl_caret, pred.var = "lat") %>% autoplot()
+p2 <- partial(mdl_caret, pred.var = "WC_bio2") %>% autoplot()
+p3 <- partial(mdl_caret, pred.var = c("lat", "WC_bio2")) %>% 
+  plotPartial(levelplot = FALSE, zlab = "yhat", drape = TRUE, 
+              colorkey = TRUE, screen = list(z = -20, x = -60))
+
+# Display plots side by side
+gridExtra::grid.arrange(p1, p2, p3, ncol = 3)
+```
+
+
+## Random Forests
+
+### Fit
+
+```{r}
+# number of features
+n_features <- length(setdiff(names(d_train), "present"))
+
+# fit a default random forest model
+mdl_rf <- ranger(present ~ ., data = d_train)
+
+# get out of the box RMSE
+(default_rmse <- sqrt(mdl_rf$prediction.error))
+```
+
+### Feature interpretation
+
+```{r}
+# re-run model with impurity-based variable importance
+mdl_impurity <- ranger(
+  present ~ ., data = d_train,
+  importance = "impurity")
+
+# re-run model with permutation-based variable importance
+mdl_permutation <- ranger(
+  present ~ ., data = d_train,
+  importance = "permutation")
+p1 <- vip::vip(mdl_impurity, bar = FALSE)
+p2 <- vip::vip(mdl_permutation, bar = FALSE)
+
+gridExtra::grid.arrange(p1, p2, nrow = 1)
+```
+
+
+
+
+
