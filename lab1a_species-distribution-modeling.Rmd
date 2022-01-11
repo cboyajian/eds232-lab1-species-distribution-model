@@ -16,8 +16,8 @@ if (!require(librarian)){
   library(librarian)
 }
 
-.libPaths(c(.libPaths(), "/Users/bbest/R/x86_64-pc-linux-gnu-library/4.0"))
-.libPaths()
+# .libPaths(c(.libPaths(), "/Users/bbest/R/x86_64-pc-linux-gnu-library/4.0"))
+# .libPaths()
 
 librarian::shelf(
   tidyverse, dismo, DT, here, htmltools, leaflet, mapview, purrr, raster, 
