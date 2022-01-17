@@ -50,8 +50,8 @@ summary(mdl_lm)
 ```
 
 ```{r}
-y_predict_lm <- predict(mdl_lm, pts_env, type = "response")
-y_true    <- pts_env$present
+y_predict_lm <- predict(mdl_lm, d, type = "response")
+y_true <- pts_env$present
 
 range(y_predict_lm)
 ```
@@ -93,21 +93,24 @@ summary(mdl_gam)
 
 ```{r}
 # show term plots
-plot(mdl_gam, scale=0)
+plot(mdl_gam, scale = 0)
 ```
 
 ### Maxent (Maximum Entropy)
 
 ```{r}
+mdl_maxent_rds <- file.path(dir_data, "mdl_maxent.rds") ## When did this get created??
+
 # show version of maxent
-maxent()
+if (!interactive())
+  maxent()
 ```
 
 ```{r}
 # get environmental rasters
 env_stack_grd <- file.path(dir_data, "env_stack.grd")
 env_stack <- stack(env_stack_grd)
-plot(env_stack, nc=2)
+plot(env_stack, nc = 2)
 ```
 
 ```{r}
@@ -117,10 +120,12 @@ obs_sp <- read_sf(obs_geo) %>%
   sf::as_Spatial() # maxent prefers sp::SpatialPoints over newer sf::sf class
 
 # fit a maximum entropy model
-mdl_maxent <- maxent(env_stack, obs_sp)
-```
+if (!file.exists(mdl_maxent_rds)){
+  mdl <- maxent(env_stack, obs_sp)
+  readr::write_rds(mdl, mdl_maxent_rds)
+}
+mdl_maxent <- read_rds(mdl_maxent_rds)
 
-```{r}
 # plot variable contributions per predictor
 plot(mdl_maxent)
 ```
