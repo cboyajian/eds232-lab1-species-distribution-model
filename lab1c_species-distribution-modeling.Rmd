@@ -11,8 +11,9 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 # load packages
 librarian::shelf(
   caret,       # m: modeling framework
-  tidyverse, here, 
+  tidyverse, here,
   pdp,         # X: partial dependence plots
+  ranger,      # m: random forest modeling
   rpart,       # m: recursive partition modeling
   rpart.plot,  # m: recursive partition plotting
   rsample,     # d: split train/test data
@@ -35,10 +36,9 @@ pts_env_csv <- file.path(dir_data, "pts_env.csv")
 # read data
 pts_env <- read_csv(pts_env_csv)
 d <- pts_env %>% 
-  select(-ID) %>%                   # not used as a predictor x
-  mutate(
-    present = factor(present)) %>%  # categorical response
-  na.omit()                         # drop rows with NA
+  select(-ID) %>%                         # not used as a predictor x
+  mutate(present = factor(present)) %>%   # categorical response
+  na.omit()                               # drop rows with NA
 
 skim(d)
 ```
@@ -68,10 +68,11 @@ table(d_train$present)
 
 ```{r}
 # run decision stump model
-mdl_dt1 <- rpart(
-  present ~ ., data = d_train, 
-  control = list(
-    cp = 0, minbucket = 5, maxdepth = 1))
+mdl_dt1 <- rpart(present ~ ., 
+                 data = d_train,
+                 control = list(cp = 0, 
+                                minbucket = 5, 
+                                maxdepth = 1))
 mdl_dt1
 ```
 
@@ -103,12 +104,11 @@ mdl_dt2$cptable
 
 ```{r}
 # caret cross validation results
-mdl_caret <- train(
-  present ~ .,
-  data       = d_train,
-  method     = "rpart",
-  trControl  = trainControl(method = "cv", number = 10),
-  tuneLength = 20)
+mdl_caret <- train(present ~ .,
+                   data = d_train,
+                   method = "rpart",
+                   trControl  = trainControl(method = "cv", number = 10),
+                   tuneLength = 20)
 
 ggplot(mdl_caret)
 ```
@@ -149,14 +149,15 @@ mdl_rf <- ranger(present ~ ., data = d_train)
 
 ```{r}
 # re-run model with impurity-based variable importance
-mdl_impurity <- ranger(
-  present ~ ., data = d_train,
-  importance = "impurity")
+mdl_impurity <- ranger(present ~ ., 
+                       data = d_train,
+                       importance = "impurity")
 
 # re-run model with permutation-based variable importance
-mdl_permutation <- ranger(
-  present ~ ., data = d_train,
-  importance = "permutation")
+mdl_permutation <- ranger(present ~ ., 
+                          data = d_train,
+                          importance = "permutation")
+
 p1 <- vip::vip(mdl_impurity, bar = FALSE)
 p2 <- vip::vip(mdl_permutation, bar = FALSE)
 
