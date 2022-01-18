@@ -28,7 +28,7 @@ redo <- FALSE
 ```{r}
 GGally::ggpairs(
   select(pts_env, -ID),
-  aes(color = factor(present)))
+  aes(color = factor(present), alpha = 0.5))
 ```
 
 
