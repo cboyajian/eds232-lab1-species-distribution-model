@@ -157,7 +157,7 @@ if (!file.exists(env_stack_grd) | redo){
   obs_hull_sp <- sf::as_Spatial(obs_hull)
   env_stack <- raster::mask(env_stack, obs_hull_sp) %>% 
     raster::crop(extent(obs_hull_sp))
-  writeRaster(env_stack, env_stack_grd, overwrite=T)  
+  writeRaster(env_stack, env_stack_grd, overwrite = T)  
 }
 env_stack <- stack(env_stack_grd)
 

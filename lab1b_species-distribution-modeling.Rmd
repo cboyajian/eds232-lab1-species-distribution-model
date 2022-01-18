@@ -19,6 +19,8 @@ pts_env_csv <- file.path(dir_data, "pts_env.csv")
 
 pts_env <- read_csv(pts_env_csv)
 nrow(pts_env)
+
+redo <- FALSE
 ```
 
 ## Pairs Plots
@@ -45,7 +47,7 @@ nrow(d)
 
 ```{r}
 # fit a linear model
-mdl_lm <- lm(present ~ ., data = d)
+mdl_lm <- lm(present ~ ., data = d) # . means all other columns (X)
 summary(mdl_lm)
 ```
 
@@ -64,12 +66,14 @@ range(y_true)
 
 ```{r}
 # fit a generalized linear model with a binomial logit link function
-mdl_glm <- glm(present ~ ., family = binomial(link="logit"), data = d)
+mdl_glm <- glm(present ~ ., 
+               family = binomial(link = "logit"), 
+               data = d)
 summary(mdl_glm)
 ```
 
 ```{r}
-y_predict_glm <- predict(mdl_glm, d, type="response")
+y_predict_glm <- predict(mdl_glm, d, type = "response")
 
 range(y_predict_glm)
 ```
@@ -99,7 +103,7 @@ plot(mdl_gam, scale = 0)
 ### Maxent (Maximum Entropy)
 
 ```{r}
-mdl_maxent_rds <- file.path(dir_data, "mdl_maxent.rds") ## When did this get created??
+mdl_maxent_rds <- file.path(dir_data, "mdl_maxent.rds") # create new file path
 
 # show version of maxent
 if (!interactive())
@@ -120,7 +124,7 @@ obs_sp <- read_sf(obs_geo) %>%
   sf::as_Spatial() # maxent prefers sp::SpatialPoints over newer sf::sf class
 
 # fit a maximum entropy model
-if (!file.exists(mdl_maxent_rds)){
+if (!file.exists(mdl_maxent_rds) | redo){
   mdl <- maxent(env_stack, obs_sp)
   readr::write_rds(mdl, mdl_maxent_rds)
 }
