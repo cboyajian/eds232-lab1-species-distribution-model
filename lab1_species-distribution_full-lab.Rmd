@@ -1,0 +1,389 @@
+---
+title: 'Lab 1: Species Distribution (full)'
+author: "Clarissa Boyajian"
+date: "1/24/2022"
+output: 
+  html_document:
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# load packages, installing if missing
+if (!require(librarian)){
+  install.packages("librarian")
+  library(librarian)
+}
+
+librarian::shelf(
+  tidyverse, dismo, DT, here, htmltools, leaflet, mapview, raster, rgbif, 
+  rgdal, rJava, sdmpredictors, sf, spocc, geojsonio, GGally, mgcv, maptools)
+select <- dplyr::select # overwrite raster::select
+options(readr.show_col_type = FALSE)
+
+# set random seed for reproducibility
+set.seed(42)
+
+# directory to store data
+dir_data <- here("data/sdm")
+dir.create(dir_data, showWarnings = F, recursive = TRUE)
+
+redo <- FALSE
+```
+
+
+# Species Distribution Modeling: Explore
+
+## Get Species Observations
+Species: Red-tailed Hawk (*Buteo jamaicensis*)
+![Source: Audubon Field Guide](images/red-tailed-hawk_photo.jpeg)
+
+```{r}
+obs_csv <- file.path(dir_data, "obs.csv")
+obs_geo <- file.path(dir_data, "obs.geojson")
+
+if (!file.exists(obs_geo) | redo){
+  # get species occurrence data from GBIF with coordinates
+  (res <- spocc::occ(
+    query = 'Buteo jamaicensis',
+    from = 'gbif',
+    has_coords = T,
+    limit = 10000))
+  
+  # extract data frame from result
+  df <- res$gbif$data[[1]] 
+  readr::write_csv(df, obs_csv)
+
+  # convert to points of observation from lon/lat columns in data frame
+  obs <- df %>% 
+    # limit observations to bounding box around north and central america
+    filter(between(longitude, -167.593385, -51.171266),
+           between(latitude, 5.645215, 71.374349)) %>% 
+    sf::st_as_sf(
+      coords = c("longitude", "latitude"),
+      crs = st_crs(4326)) %>% 
+    select(prov, key) %>%  # save space (joinable from obs_csv)
+    distinct(geometry, .keep_all = TRUE) # remove duplicate geometries
+  
+  sf::write_sf(obs, obs_geo, delete_dsn = T)
+}
+
+obs <- sf::read_sf(obs_geo)
+nrow(obs) # number of rows
+```
+
+### Map of species observation locations
+
+```{r}
+# show points on map
+mapview::mapview(obs, map.types = "Esri.WorldStreetMap")
+```
+
+
+### Questions:
+**Question 1**: There were a total of 7,004,451 observations in GBIF for the Red-tailed hawk (Buteo jamaicensis) as of 2022-01-24.
+**Question 2**: There was one point from the original dataset that was in the ocean near Europe. To fix this issues, I created a bounding box around the parts of North and Central America and used this bbox to exclude any locations outside of the Red-tailed Hawks habitat.
+
+
+## Get environmental data
+
+### Explore environmental data options
+
+```{r}
+dir_env <- file.path(dir_data, "env")
+
+# set a default data directory
+options(sdmpredictors_datadir = dir_env)
+
+# choosing terrestrial
+env_datasets <- sdmpredictors::list_datasets(terrestrial = TRUE, marine = FALSE)
+
+# show table of datasets
+env_datasets %>% 
+  select(dataset_code, description, citation) %>% 
+  DT::datatable()
+```
+
+```{r}
+# choose datasets for a vector
+env_datasets_vec <- c("WorldClim", "ENVIREM")
+
+# get layers
+env_layers <- sdmpredictors::list_layers(env_datasets_vec)
+DT::datatable(env_layers)
+```
+
+### Choose evnironmental data layers
+
+```{r}
+# choose layers after some inspection and perhaps consulting literature
+env_layers_vec <- c("WC_alt", # altitude
+                    "WC_bio1", # annual mean temperature
+                    "WC_bio2", # mean diurnal temperature range
+                    "ER_tri", # terrain roughness
+                    "WC_bio12") # annual precipitation
+
+# get layers
+env_stack <- load_layers(env_layers_vec)
+
+# interactive plot layers, hiding all but first (select others)
+# mapview(env_stack, hide = T) # makes the html too big for Github
+plot(env_stack, nc = 2)
+```
+
+### Questions:
+**Question 3**: The environmental layers that I choose include: altitude, annual mean temperature, mean diurnal temperature range, terrain roughness, and annual precipitation. It was difficult to find
+
+maximum and minimum temperatures, precipitation, solar radiation, wind speed, and cloud cover as abiotic factors
+
+```{r}
+obs_hull_geo  <- file.path(dir_data, "obs_hull.geojson")
+env_stack_grd <- file.path(dir_data, "env_stack.grd")
+
+if (!file.exists(obs_hull_geo) | redo){
+  # make convex hull around points of observation
+  obs_hull <- sf::st_convex_hull(st_union(obs))
+  
+  # save obs hull
+  write_sf(obs_hull, obs_hull_geo)
+}
+obs_hull <- read_sf(obs_hull_geo)
+
+# show points on map
+mapview(
+  list(obs, obs_hull))
+```
+
+```{r}
+if (!file.exists(env_stack_grd) | redo){
+  obs_hull_sp <- sf::as_Spatial(obs_hull)
+  env_stack <- raster::mask(env_stack, obs_hull_sp) %>% 
+    raster::crop(extent(obs_hull_sp))
+  writeRaster(env_stack, env_stack_grd, overwrite = T)  
+}
+env_stack <- stack(env_stack_grd)
+
+# show map
+plot(env_stack, nc=2)
+```
+
+### Pseudo-Absence
+
+```{r}
+absence_geo <- file.path(dir_data, "absence.geojson")
+pts_geo     <- file.path(dir_data, "pts.geojson")
+pts_env_csv <- file.path(dir_data, "pts_env.csv")
+
+if (!file.exists(absence_geo) | redo){
+  # get raster count of observations
+  r_obs <- rasterize(
+    sf::as_Spatial(obs), env_stack[[1]], field=1, fun='count')
+  
+  # create mask for 
+  r_mask <- mask(env_stack[[1]] > -Inf, r_obs, inverse=T)
+  
+  # generate random points inside mask
+  absence <- dismo::randomPoints(r_mask, nrow(obs)) %>% 
+    as_tibble() %>% 
+    st_as_sf(coords = c("x", "y"), crs = 4326)
+  
+  write_sf(absence, absence_geo, delete_dsn = T)
+}
+absence <- read_sf(absence_geo)
+
+# show map of presence, ie obs, and absence
+mapview(obs, col.regions = "green") + 
+  mapview(absence, col.regions = "gray")
+```
+
+```{r}
+if (!file.exists(pts_env_csv) | redo){
+
+  # combine presence and absence into single set of labeled points 
+  pts <- rbind(
+    obs %>% 
+      mutate(present = 1) %>% 
+      select(present, key),
+    absence %>% mutate(present = 0, 
+                       key = NA)) %>% 
+    mutate(ID = 1:n()) %>% 
+    relocate(ID)
+  write_sf(pts, pts_geo, delete_dsn = TRUE)
+
+  # extract raster values for points
+  pts_env <- raster::extract(env_stack, as_Spatial(pts), df = TRUE) %>% 
+    tibble() %>% 
+    # join present and geometry columns to raster value results for points
+    left_join(pts %>% select(ID, present), 
+              by = "ID") %>% 
+    relocate(present, .after = ID) %>% 
+    # extract lon, lat as single columns
+    mutate(lon = st_coordinates(geometry)[,1],
+           lat = st_coordinates(geometry)[,2]) %>% 
+    select(-geometry)
+  write_csv(pts_env, pts_env_csv)
+}
+pts_env <- read_csv(pts_env_csv)
+
+pts_env %>% 
+  # show first 10 presence, last 10 absence
+  slice(c(1:10, (nrow(pts_env)-9):nrow(pts_env))) %>% 
+  DT::datatable(rownames = FALSE,
+                options = list(dom = "t",
+                               pageLength = 20))
+```
+
+
+## Term Plots
+
+```{r}
+pts_env %>% 
+  select(-ID) %>% 
+  mutate(present = factor(present)) %>% 
+  pivot_longer(-present) %>% 
+  ggplot() +
+  geom_density(aes(x = value, fill = present)) + 
+  scale_fill_manual(values = alpha(c("gray", "green"), 0.5)) +
+  scale_x_continuous(expand=c(0,0)) +
+  scale_y_continuous(expand=c(0,0)) +
+  theme_bw() + 
+  facet_wrap(~name, scales = "free") +
+  theme(legend.position = c(1, 0),
+        legend.justification = c(1, 0))
+```
+
+
+# Species Distribution Modeling: Logistic Regression
+
+## Pairs Plots
+
+```{r}
+GGally::ggpairs(
+  select(pts_env, -ID),
+  aes(color = factor(present), alpha = 0.5))
+```
+
+
+## Logistic Regression
+
+### Setup Data
+```{r}
+# setup model data
+model_data <- pts_env %>% 
+  select(-ID) %>%  # remove terms we don't want to model
+  tidyr::drop_na() # drop rows with NA values
+nrow(model_data)
+```
+
+### Linear Model
+
+```{r}
+# fit a linear model
+mdl_lm <- lm(present ~ ., data = model_data) # . means all other columns (X)
+summary(mdl_lm)
+```
+
+```{r}
+y_predict_lm <- predict(mdl_lm, model_data, type = "response")
+y_true <- pts_env$present
+
+range(y_predict_lm)
+```
+
+```{r}
+range(y_true)
+```
+
+### Generalized Linear Model
+
+```{r}
+# fit a generalized linear model with a binomial logit link function
+mdl_glm <- glm(present ~ ., 
+               family = binomial(link = "logit"), 
+               data = model_data)
+summary(mdl_glm)
+```
+
+```{r}
+y_predict_glm <- predict(mdl_glm, model_data, type = "response")
+
+range(y_predict_glm)
+```
+
+#### Term Plots
+```{r}
+termplot(mdl_glm, partial.resid = TRUE, se = TRUE, main = F)
+```
+
+### Generalized Additive Model
+
+```{r}
+# fit a generalized additive model with smooth predictors
+mdl_gam <- mgcv::gam(
+  formula = present ~ s(WC_alt) + s(WC_bio1) + 
+    s(WC_bio2) + s(ER_tri) + s(WC_bio12) + s(lon) + s(lat), 
+  family = binomial, data = model_data)
+
+summary(mdl_gam)
+```
+
+#### Term Plots
+
+```{r}
+plot(mdl_gam, scale = 0)
+```
+
+### Maxent (Maximum Entropy)
+
+```{r}
+mdl_maxent_rds <- file.path(dir_data, "mdl_maxent.rds") # create new file path
+
+# show version of maxent
+if (!interactive())
+  maxent()
+```
+
+```{r}
+# plot environmental rasters
+plot(env_stack, nc = 2)
+```
+
+```{r}
+# get presence-only observation points (maxent extracts raster values for you)
+obs_sp <- sf::as_Spatial(obs) # maxent prefers sp::SpatialPoints over newer sf::sf class
+
+# fit a maximum entropy model
+if (!file.exists(mdl_maxent_rds) | redo){
+  mdl <- maxent(env_stack, obs_sp)
+  readr::write_rds(mdl, mdl_maxent_rds)
+}
+mdl_maxent <- read_rds(mdl_maxent_rds)
+
+# plot variable contributions per predictor
+plot(mdl_maxent)
+```
+
+#### Term Plots
+
+```{r}
+# plot term plots
+response(mdl_maxent)
+```
+
+#### Predict
+
+```{r}
+y_predict_maxent <- predict(env_stack, mdl_maxent)
+
+plot(y_predict_maxent, main = 'Maxent, raw prediction')
+data(wrld_simpl, package = "maptools")
+plot(wrld_simpl, add = TRUE, border='dark grey')
+```
+
+
+
+
