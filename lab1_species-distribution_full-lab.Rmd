@@ -1,16 +1,17 @@
 ---
-title: 'Lab 1: Species Distribution (full)'
+title: 'Lab 1: Species Distribution'
 author: "Clarissa Boyajian"
 date: "1/24/2022"
 output: 
   html_document:
     number_sections: true
+    code_folding: hide
+    toc: true
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
-
 
 ```{r}
 # load packages, installing if missing
@@ -18,20 +19,33 @@ if (!require(librarian)){
   install.packages("librarian")
   library(librarian)
 }
-
 librarian::shelf(
   tidyverse, dismo, DT, here, htmltools, leaflet, mapview, raster, rgbif, 
-  rgdal, rJava, sdmpredictors, sf, spocc, geojsonio, GGally, mgcv, maptools)
+  rgdal, rJava, sdmpredictors, sf, spocc, geojsonio, GGally, mgcv, maptools,
+  caret,       # m: modeling framework
+  pdp,         # X: partial dependence plots
+  ranger,      # m: random forest modeling
+  rpart,       # m: recursive partition modeling
+  rpart.plot,  # m: recursive partition plotting
+  rsample,     # d: split train/test data
+  skimr,       # d: skim summarize data table
+  vip         # X: variable importance
+  )
 select <- dplyr::select # overwrite raster::select
-options(readr.show_col_type = FALSE)
+
+options(readr.show_col_type = FALSE, scipen = 999)
 
 # set random seed for reproducibility
 set.seed(42)
+
+# graphical theme
+ggplot2::theme_set(ggplot2::theme_light())
 
 # directory to store data
 dir_data <- here("data/sdm")
 dir.create(dir_data, showWarnings = F, recursive = TRUE)
 
+# logical, redo full calculations within if statements or not
 redo <- FALSE
 ```
 
@@ -41,7 +55,7 @@ redo <- FALSE
 ## Get Species Observations
 Species: Red-tailed Hawk (*Buteo jamaicensis*)
 ![Source: Audubon Field Guide](images/red-tailed-hawk_photo.jpeg)
-
+Total observations after creating bounding box around habitat area and removing duplicate geometries. 
 ```{r}
 obs_csv <- file.path(dir_data, "obs.csv")
 obs_geo <- file.path(dir_data, "obs.geojson")
@@ -85,7 +99,7 @@ mapview::mapview(obs, map.types = "Esri.WorldStreetMap")
 
 
 ### Questions:
-**Question 1**: There were a total of 7,004,451 observations in GBIF for the Red-tailed hawk (Buteo jamaicensis) as of 2022-01-24.
+**Question 1**: There were a total of 7,004,451 observations in GBIF for the Red-tailed hawk (Buteo jamaicensis) as of 2022-01-24.\
 **Question 2**: There was one point from the original dataset that was in the ocean near Europe. To fix this issues, I created a bounding box around the parts of North and Central America and used this bbox to exclude any locations outside of the Red-tailed Hawks habitat.
 
 
@@ -117,7 +131,7 @@ env_layers <- sdmpredictors::list_layers(env_datasets_vec)
 DT::datatable(env_layers)
 ```
 
-### Choose evnironmental data layers
+### Choose environmental data layers
 
 ```{r}
 # choose layers after some inspection and perhaps consulting literature
@@ -136,9 +150,9 @@ plot(env_stack, nc = 2)
 ```
 
 ### Questions:
-**Question 3**: The environmental layers that I choose include: altitude, annual mean temperature, mean diurnal temperature range, terrain roughness, and annual precipitation. It was difficult to find
+**Question 3**: The environmental layers that I choose include: altitude, annual mean temperature, mean diurnal temperature range, terrain roughness, and annual precipitation. In the literature I found, other studies used: maximum and minimum temperatures, precipitation, solar radiation, wind speed, and cloud cover as abiotic factors. I felt that the first two variables from the literature were covered by annual mean temperature, mean diurnal temperature range, and annual precipitation. The other variables were not present in the available layers, so I did not include them.
 
-maximum and minimum temperatures, precipitation, solar radiation, wind speed, and cloud cover as abiotic factors
+### Raster plot of environmental rasters clipped to species range	
 
 ```{r}
 obs_hull_geo  <- file.path(dir_data, "obs_hull.geojson")
@@ -257,6 +271,7 @@ pts_env %>%
 ```
 
 
+
 # Species Distribution Modeling: Logistic Regression
 
 ## Pairs Plots
@@ -287,14 +302,14 @@ mdl_lm <- lm(present ~ ., data = model_data) # . means all other columns (X)
 summary(mdl_lm)
 ```
 
-```{r}
+```{r, class.source = "fold-show"}
 y_predict_lm <- predict(mdl_lm, model_data, type = "response")
 y_true <- pts_env$present
 
 range(y_predict_lm)
 ```
 
-```{r}
+```{r, class.source = "fold-show"}
 range(y_true)
 ```
 
@@ -308,13 +323,13 @@ mdl_glm <- glm(present ~ .,
 summary(mdl_glm)
 ```
 
-```{r}
+```{r, class.source = "fold-show"}
 y_predict_glm <- predict(mdl_glm, model_data, type = "response")
 
 range(y_predict_glm)
 ```
 
-#### Term Plots
+#### GLM Term Plots
 ```{r}
 termplot(mdl_glm, partial.resid = TRUE, se = TRUE, main = F)
 ```
@@ -331,11 +346,16 @@ mdl_gam <- mgcv::gam(
 summary(mdl_gam)
 ```
 
-#### Term Plots
+#### GAM Term Plots
 
 ```{r}
 plot(mdl_gam, scale = 0)
 ```
+
+
+### Questions
+**Question 4**: There are two environment variables that seem to contribute most towards presence. For altitude, below about 250 ft of altitude there is a higher chance of presence with a high confidence range. Where there is a diurnal temperature range (bio2) between about 7 and 12 degree there is a higher chance of species presence. Additionally, between about -120 and -100 longitudinal degrees there is a higher chance of species presence. 
+
 
 ### Maxent (Maximum Entropy)
 
@@ -352,6 +372,8 @@ if (!interactive())
 plot(env_stack, nc = 2)
 ```
 
+#### Maxent variable contribution plot
+
 ```{r}
 # get presence-only observation points (maxent extracts raster values for you)
 obs_sp <- sf::as_Spatial(obs) # maxent prefers sp::SpatialPoints over newer sf::sf class
@@ -367,14 +389,14 @@ mdl_maxent <- read_rds(mdl_maxent_rds)
 plot(mdl_maxent)
 ```
 
-#### Term Plots
+#### Maxent term plots
 
 ```{r}
 # plot term plots
 response(mdl_maxent)
 ```
 
-#### Predict
+#### Maxent prediction
 
 ```{r}
 y_predict_maxent <- predict(env_stack, mdl_maxent)
@@ -383,6 +405,166 @@ plot(y_predict_maxent, main = 'Maxent, raw prediction')
 data(wrld_simpl, package = "maptools")
 plot(wrld_simpl, add = TRUE, border='dark grey')
 ```
+
+### Questions
+**Question 4**: There are four environment variables that seem to contribute most towards presence for the maxent model. The first two, altitude and bio2 were similar to the GAM results. For altitude, below about 500 ft of altitude there is a high chance of presence. Where there is a diurnal temperature range (bio2) between about 5 and 15 degree there is a high chance of species presence. The other two variables (mean annual temperature and annual precipitation) had values that seems to predict species presence that did not show up in the GAM results. When the mean annual temperature (bio1) is between 10 and 20 degrees there is a high chance of species presence. And when the annual precipitation is below 1,000 there is a high chance of species presence. 
+
+
+
+# Species Distribution Modeling: Decision Trees
+
+## Set up data
+
+```{r}
+decision_tree_data <- pts_env %>% 
+  select(-ID) %>%                         # not used as a predictor x
+  mutate(present = factor(present)) %>%   # categorical response
+  na.omit()                               # drop rows with NA
+
+skim(decision_tree_data)
+```
+
+
+## Split data into training and testing
+
+```{r}
+# create training set with 80% of full data
+d_split  <- rsample::initial_split(decision_tree_data, 
+                                   prop = 0.8, 
+                                   strata = "present")
+d_train  <- rsample::training(d_split)
+```
+
+```{r, class.source = "fold-show"}
+# show number of rows present is 0 vs 1 (all data)
+table(decision_tree_data$present)
+```
+
+```{r, class.source = "fold-show"}
+# show number of rows present is 0 vs 1 (training data)
+table(d_train$present)
+```
+
+
+## Rpart models
+
+### Partition, depth=1
+
+```{r, class.source = "fold-show"}
+# run decision stump model
+mdl_dt1 <- rpart(present ~ ., 
+                 data = d_train,
+                 control = list(cp = 0, 
+                                minbucket = 5, 
+                                maxdepth = 1))
+mdl_dt1
+```
+
+```{r}
+# plot tree 
+par(mar = c(1, 1, 1, 1))
+rpart.plot(mdl_dt1)
+```
+
+### Partition, depth=default
+
+```{r, class.source = "fold-show"}
+# decision tree with defaults
+mdl_dt2 <- rpart(present ~ ., data = d_train)
+mdl_dt2
+```
+
+### Complexity parameter plots
+
+```{r}
+rpart.plot(mdl_dt2)
+
+# plot complexity parameter
+plotcp(mdl_dt2)
+
+# rpart cross validation results
+mdl_dt2$cptable
+```
+
+```{r}
+# caret cross validation results
+mdl_caret <- train(present ~ .,
+                   data = d_train,
+                   method = "rpart",
+                   trControl  = trainControl(method = "cv", number = 10),
+                   tuneLength = 20)
+
+ggplot(mdl_caret)
+```
+
+### Questions
+**Question 5**: It is recommended that we use a tree of depth 5. 
+
+### Variable importance plot
+
+```{r}
+vip(mdl_caret, num_features = 40, bar = FALSE)
+```
+
+### Questions
+**Question 6**: The top three most important variables for my model are: latitude, annual mean temperature (bio1), and altitude.
+
+### Partial dependence plots
+
+```{r}
+# Construct partial dependence plots
+partial_dependency1 <- partial(mdl_caret, pred.var = "lat") %>% autoplot()
+partial_dependency2 <- partial(mdl_caret, pred.var = "WC_bio2") %>% autoplot()
+partial_dependency3 <- partial(mdl_caret, pred.var = c("lat", "WC_bio2")) %>%
+  plotPartial(levelplot = FALSE, zlab = "yhat", drape = TRUE,
+              colorkey = TRUE, screen = list(z = -20, x = -60))
+
+# Display plots side by side
+gridExtra::grid.arrange(partial_dependency1, partial_dependency2, partial_dependency3, ncol = 3)
+```
+
+
+## Random Forests
+
+### Fit
+
+```{r, class.source = "fold-show"}
+# number of features
+n_features <- length(setdiff(names(d_train), "present"))
+
+# fit a default random forest model
+mdl_rf <- ranger(present ~ ., data = d_train)
+
+# get out of the box RMSE
+(default_rmse <- sqrt(mdl_rf$prediction.error))
+```
+
+### Variable importance plot
+
+```{r}
+# re-run model with impurity-based variable importance
+mdl_impurity <- ranger(present ~ ., 
+                       data = d_train,
+                       importance = "impurity")
+
+# re-run model with permutation-based variable importance
+mdl_permutation <- ranger(present ~ ., 
+                          data = d_train,
+                          importance = "permutation")
+
+p_impurity <- vip::vip(mdl_impurity, bar = FALSE)
+p_permutation <- vip::vip(mdl_permutation, bar = FALSE)
+
+gridExtra::grid.arrange(p_impurity, p_permutation, nrow = 1)
+```
+
+### Questions
+**Question 7**: 
+How might variable importance differ between rpart and RandomForest in your model outputs?
+
+
+
+
 
 
 
