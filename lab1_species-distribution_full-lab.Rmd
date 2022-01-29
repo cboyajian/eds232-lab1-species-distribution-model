@@ -1,0 +1,724 @@
+---
+title: 'Lab 1: Species Distribution Modeling'
+author: "Clarissa Boyajian"
+date: "1/25/2022"
+output: 
+  html_document:
+    number_sections: true
+    code_folding: hide
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r}
+# load packages, installing if missing
+if (!require(librarian)){
+  install.packages("librarian")
+  library(librarian)
+}
+librarian::shelf(
+  tidyverse, dismo, DT, here, htmltools, leaflet, mapview, raster, rgbif, 
+  rgdal, rJava, sdmpredictors, sf, spocc, geojsonio, GGally, mgcv, maptools,
+  caret,       # m: modeling framework
+  pdp,         # X: partial dependence plots
+  ranger,      # m: random forest modeling
+  rpart,       # m: recursive partition modeling
+  rpart.plot,  # m: recursive partition plotting
+  rsample,     # d: split train/test data
+  skimr,       # d: skim summarize data table
+  vip,         # X: variable importance
+  dismo, # species distribution modeling: maxent(), predict(), evaluate(), 
+  usdm  # uncertainty analysis for species distribution models: vifcor()
+  )
+select <- dplyr::select # overwrite raster::select
+
+options(readr.show_col_type = FALSE, scipen = 999)
+
+# set random seed for reproducibility
+set.seed(42)
+
+# graphical theme
+ggplot2::theme_set(ggplot2::theme_light())
+
+# directory to store data
+dir_data <- here("data/sdm")
+dir.create(dir_data, showWarnings = F, recursive = TRUE)
+
+# file paths
+obs_csv <- file.path(dir_data, "obs.csv")
+obs_geo <- file.path(dir_data, "obs.geojson")
+dir_env <- file.path(dir_data, "env")
+obs_hull_geo  <- file.path(dir_data, "obs_hull.geojson")
+env_stack_grd <- file.path(dir_data, "env_stack.grd")
+absence_geo <- file.path(dir_data, "absence.geojson")
+pts_geo     <- file.path(dir_data, "pts.geojson")
+pts_env_csv <- file.path(dir_data, "pts_env.csv")
+mdl_maxv_rds  <- file.path(dir_data, "mdl_maxent_vif.rds")
+
+# logical, redo full calculations within if statements or not
+redo <- FALSE
+```
+
+
+# Explore
+
+## Species observations
+Species: Red-tailed Hawk (*Buteo jamaicensis*)
+![Source: Audubon Field Guide](images/red-tailed-hawk_photo.jpeg)
+
+**Total observations after creating bounding box around habitat area and removing duplicate geometries.**
+
+```{r}
+if (!file.exists(obs_geo) | redo){
+  # get species occurrence data from GBIF with coordinates
+  (res <- spocc::occ(
+    query = 'Buteo jamaicensis',
+    from = 'gbif',
+    has_coords = T,
+    limit = 10000))
+  
+  # extract data frame from result
+  df <- res$gbif$data[[1]] 
+  readr::write_csv(df, obs_csv)
+
+  # convert to points of observation from lon/lat columns in data frame
+  obs <- df %>% 
+    # limit observations to bounding box around north and central america
+    filter(between(longitude, -167.593385, -51.171266),
+           between(latitude, 5.645215, 71.374349)) %>% 
+    sf::st_as_sf(
+      coords = c("longitude", "latitude"),
+      crs = st_crs(4326)) %>% 
+    select(prov, key) %>%  # save space (joinable from obs_csv)
+    distinct(geometry, .keep_all = TRUE) # remove duplicate geometries
+  
+  sf::write_sf(obs, obs_geo, delete_dsn = T)
+}
+
+obs <- sf::read_sf(obs_geo)
+nrow(obs) # number of rows
+```
+
+### Map of species observation locations
+
+```{r}
+# show points on map
+mapview::mapview(obs, map.types = "Esri.WorldStreetMap")
+```
+
+
+## Get environmental data
+
+**Explore environmental data options**
+
+```{r}
+# set a default data directory
+options(sdmpredictors_datadir = dir_env)
+
+# choosing terrestrial
+env_datasets <- sdmpredictors::list_datasets(terrestrial = TRUE, marine = FALSE)
+
+# show table of datasets
+env_datasets %>% 
+  select(dataset_code, description, citation) %>% 
+  DT::datatable()
+```
+
+```{r}
+# choose datasets for a vector
+env_datasets_vec <- c("WorldClim", "ENVIREM")
+
+# get layers
+env_layers <- sdmpredictors::list_layers(env_datasets_vec)
+DT::datatable(env_layers)
+```
+
+**Choose environmental data layers**
+
+```{r}
+# choose layers after some inspection and perhaps consulting literature
+env_layers_vec <- c("WC_alt", # altitude
+                    "WC_bio1", # annual mean temperature
+                    "WC_bio2", # mean diurnal temperature range
+                    "ER_tri", # terrain roughness
+                    "WC_bio12") # annual precipitation
+
+# get layers
+env_stack <- load_layers(env_layers_vec)
+
+# interactive plot layers, hiding all but first (select others)
+# mapview(env_stack, hide = T) # makes the html too big for Github
+plot(env_stack, nc = 2)
+```
+
+**Create species range**
+
+```{r}
+if (!file.exists(obs_hull_geo) | redo){
+  # make convex hull around points of observation
+  obs_hull <- sf::st_convex_hull(st_union(obs))
+  
+  # save obs hull
+  write_sf(obs_hull, obs_hull_geo)
+}
+obs_hull <- read_sf(obs_hull_geo)
+
+# show points on map
+mapview(list(obs, obs_hull))
+```
+
+### Raster plot of environmental rasters clipped to species range	
+
+```{r}
+if (!file.exists(env_stack_grd) | redo){
+  obs_hull_sp <- sf::as_Spatial(obs_hull)
+  env_stack <- raster::mask(env_stack, obs_hull_sp) %>% 
+    raster::crop(extent(obs_hull_sp))
+  writeRaster(env_stack, env_stack_grd, overwrite = T)  
+}
+env_stack <- stack(env_stack_grd)
+
+# show map
+plot(env_stack, nc = 2)
+```
+
+### Map of pseudo-absence points
+
+```{r}
+if (!file.exists(absence_geo) | redo){
+  # get raster count of observations
+  r_obs <- rasterize(
+    sf::as_Spatial(obs), env_stack[[1]], field=1, fun='count')
+  
+  # create mask for 
+  r_mask <- mask(env_stack[[1]] > -Inf, r_obs, inverse=T)
+  
+  # generate random points inside mask
+  absence <- dismo::randomPoints(r_mask, nrow(obs)) %>% 
+    as_tibble() %>% 
+    st_as_sf(coords = c("x", "y"), crs = 4326)
+  
+  write_sf(absence, absence_geo, delete_dsn = T)
+}
+absence <- read_sf(absence_geo)
+
+# show map of presence, ie obs, and absence
+mapview(obs, col.regions = "green") + 
+  mapview(absence, col.regions = "gray")
+```
+
+```{r}
+if (!file.exists(pts_env_csv) | redo){
+
+  # combine presence and absence into single set of labeled points 
+  pts <- rbind(
+    obs %>% 
+      mutate(present = 1) %>% 
+      select(present, key),
+    absence %>% mutate(present = 0, 
+                       key = NA)) %>% 
+    mutate(ID = 1:n()) %>% 
+    relocate(ID)
+  write_sf(pts, pts_geo, delete_dsn = TRUE)
+
+  # extract raster values for points
+  pts_env <- raster::extract(env_stack, as_Spatial(pts), df = TRUE) %>% 
+    tibble() %>% 
+    # join present and geometry columns to raster value results for points
+    left_join(pts %>% select(ID, present), 
+              by = "ID") %>% 
+    relocate(present, .after = ID) %>% 
+    # extract lon, lat as single columns
+    mutate(lon = st_coordinates(geometry)[,1],
+           lat = st_coordinates(geometry)[,2]) %>% 
+    select(-geometry)
+  write_csv(pts_env, pts_env_csv)
+}
+pts_env <- read_csv(pts_env_csv)
+
+pts_env %>% 
+  # show first 10 presence, last 10 absence
+  slice(c(1:10, (nrow(pts_env)-9):nrow(pts_env))) %>% 
+  DT::datatable(rownames = FALSE,
+                options = list(dom = "t",
+                               pageLength = 20))
+```
+
+### Environmental data term plots
+
+```{r}
+pts_env %>% 
+  select(-ID) %>% 
+  mutate(present = factor(present)) %>% 
+  pivot_longer(-present) %>% 
+  ggplot() +
+  geom_density(aes(x = value, fill = present)) + 
+  scale_fill_manual(values = alpha(c("gray", "green"), 0.5)) +
+  scale_x_continuous(expand=c(0,0)) +
+  scale_y_continuous(expand=c(0,0)) +
+  theme_bw() + 
+  facet_wrap(~name, scales = "free") +
+  theme(legend.position = c(1, 0),
+        legend.justification = c(1, 0))
+```
+
+
+## Questions
+**Question 1**: There were a total of 7,004,451 observations in GBIF for the Red-tailed hawk (Buteo jamaicensis) as of 2022-01-24.\
+**Question 2**: There was one point from the original dataset that was in the ocean near Europe. To fix this issues, I created a bounding box around the parts of North and Central America and used this bbox to exclude any locations outside of the Red-tailed Hawks habitat.\
+**Question 3**: The environmental layers that I choose include: altitude, annual mean temperature, mean diurnal temperature range, terrain roughness, and annual precipitation. In the literature I found, other studies used: maximum and minimum temperatures, precipitation, solar radiation, wind speed, and cloud cover as abiotic factors. I felt that the first two variables from the literature were covered by annual mean temperature, mean diurnal temperature range, and annual precipitation. The other variables were not present in the available layers, so I did not include them.
+
+
+
+# Logistic Regression
+
+## Plot of ggpairs
+
+```{r}
+GGally::ggpairs(
+  select(pts_env, -ID),
+  aes(color = factor(present), alpha = 0.5))
+```
+
+**Set up data**
+
+```{r}
+# setup model data
+model_data <- pts_env %>% 
+  select(-ID) %>%  # remove terms we don't want to model
+  tidyr::drop_na() # drop rows with NA values
+nrow(model_data)
+```
+
+## Linear Model
+
+```{r}
+# fit a linear model
+mdl_lm <- lm(present ~ ., data = model_data) # . means all other columns (X)
+summary(mdl_lm)
+```
+
+```{r, class.source = "fold-show"}
+y_predict_lm <- predict(mdl_lm, model_data, type = "response")
+y_true <- pts_env$present
+
+range(y_predict_lm)
+```
+
+```{r, class.source = "fold-show"}
+range(y_true)
+```
+
+## Generalized Linear Model
+
+```{r}
+# fit a generalized linear model with a binomial logit link function
+mdl_glm <- glm(present ~ ., 
+               family = binomial(link = "logit"), 
+               data = model_data)
+summary(mdl_glm)
+```
+
+```{r, class.source = "fold-show"}
+y_predict_glm <- predict(mdl_glm, model_data, type = "response")
+
+range(y_predict_glm)
+```
+
+### GLM Term Plots
+
+```{r}
+termplot(mdl_glm, partial.resid = TRUE, se = TRUE, main = F)
+```
+
+## Generalized Additive Model
+
+```{r}
+# fit a generalized additive model with smooth predictors
+mdl_gam <- mgcv::gam(
+  formula = present ~ s(WC_alt) + s(WC_bio1) + 
+    s(WC_bio2) + s(ER_tri) + s(WC_bio12) + s(lon) + s(lat), 
+  family = binomial, data = model_data)
+
+summary(mdl_gam)
+```
+
+### GAM Term Plots
+
+```{r}
+plot(mdl_gam, scale = 0)
+```
+
+## Maxent (Maximum Entropy)
+
+```{r}
+mdl_maxent_rds <- file.path(dir_data, "mdl_maxent.rds") # create new file path
+
+# show version of maxent
+if (!interactive())
+  maxent()
+```
+
+```{r}
+# plot environmental rasters
+plot(env_stack, nc = 2)
+```
+
+### Maxent variable contribution plot
+
+```{r}
+# get presence-only observation points (maxent extracts raster values for you)
+obs_sp <- sf::as_Spatial(obs) # maxent prefers sp::SpatialPoints over newer sf::sf class
+
+# fit a maximum entropy model
+if (!file.exists(mdl_maxent_rds) | redo){
+  mdl <- maxent(env_stack, obs_sp)
+  readr::write_rds(mdl, mdl_maxent_rds)
+}
+mdl_maxent <- read_rds(mdl_maxent_rds)
+
+# plot variable contributions per predictor
+plot(mdl_maxent)
+```
+
+### Maxent term plots
+
+```{r}
+# plot term plots
+response(mdl_maxent)
+```
+
+### Maxent prediction
+
+```{r}
+y_predict_maxent <- predict(env_stack, mdl_maxent)
+
+plot(y_predict_maxent, main = 'Maxent, raw prediction')
+data(wrld_simpl, package = "maptools")
+plot(wrld_simpl, add = TRUE, border='dark grey')
+```
+
+## Questions
+**Question 4**: There are two environment variables that seem to contribute most towards presence. For altitude (WC_atl), below about 250 ft of altitude there is a higher chance of presence with a high confidence range. Where there is a diurnal temperature range (WC_bio2) between about 7 and 12 degree there is a higher chance of species presence. Additionally, between about -120 and -100 longitudinal degrees there is a higher chance of species presence.\
+**Question 5**: There are four environment variables that seem to contribute most towards presence for the maxent model. The first two, altitude (WC_alt) and diurnal temperature range (WC_bio2) were similar to the GAM results. For altitude, below about 500 ft of altitude there is a high chance of presence. Where there is a diurnal temperature range between about 5 and 15 degree there is a high chance of species presence. The other two variables (mean annual temperature and annual precipitation) had values that seems to predict species presence that did not show up in the GAM results. When the mean annual temperature (WC_bio1) is between 10 and 20 degrees there is a high chance of species presence. And when the annual precipitation (WC_bio12) is below 1,000 there is a high chance of species presence. 
+
+
+
+# Decision Trees
+
+**Set up data**
+
+```{r}
+decision_tree_data <- pts_env %>% 
+  select(-ID) %>%                         # not used as a predictor x
+  mutate(present = factor(present)) %>%   # categorical response
+  na.omit()                               # drop rows with NA
+
+skim(decision_tree_data)
+```
+
+
+## Split data into training and testing
+
+```{r}
+# create training set with 80% of full data
+d_split  <- rsample::initial_split(decision_tree_data, 
+                                   prop = 0.8, 
+                                   strata = "present")
+d_train  <- rsample::training(d_split)
+```
+
+```{r, class.source = "fold-show"}
+# show number of rows present is 0 vs 1 (all data)
+table(decision_tree_data$present)
+```
+
+```{r, class.source = "fold-show"}
+# show number of rows present is 0 vs 1 (training data)
+table(d_train$present)
+```
+
+
+## Rpart models
+
+### Partition, depth=1
+
+```{r, class.source = "fold-show"}
+# run decision stump model
+mdl_dt1 <- rpart(present ~ ., 
+                 data = d_train,
+                 control = list(cp = 0, 
+                                minbucket = 5, 
+                                maxdepth = 1))
+mdl_dt1
+```
+
+```{r}
+# plot tree 
+par(mar = c(1, 1, 1, 1))
+rpart.plot(mdl_dt1)
+```
+
+### Partition, depth=default
+
+```{r, class.source = "fold-show"}
+# decision tree with defaults
+mdl_dt2 <- rpart(present ~ ., data = d_train)
+mdl_dt2
+```
+
+### Complexity parameter plots
+
+```{r}
+rpart.plot(mdl_dt2)
+
+# plot complexity parameter
+plotcp(mdl_dt2)
+
+# rpart cross validation results
+mdl_dt2$cptable
+```
+
+```{r}
+# caret cross validation results
+mdl_caret <- train(present ~ .,
+                   data = d_train,
+                   method = "rpart",
+                   trControl  = trainControl(method = "cv", number = 10),
+                   tuneLength = 20)
+
+ggplot(mdl_caret)
+```
+
+### Variable importance plot
+
+```{r}
+vip(mdl_caret, num_features = 40, bar = FALSE)
+```
+
+**Partial dependence plots**
+
+```{r}
+# Construct partial dependence plots
+partial_dependency1 <- partial(mdl_caret, pred.var = "lat") %>% autoplot()
+partial_dependency2 <- partial(mdl_caret, pred.var = "WC_bio2") %>% autoplot()
+partial_dependency3 <- partial(mdl_caret, pred.var = c("lat", "WC_bio2")) %>%
+  plotPartial(levelplot = FALSE, zlab = "yhat", drape = TRUE,
+              colorkey = TRUE, screen = list(z = -20, x = -60))
+
+# Display plots side by side
+gridExtra::grid.arrange(partial_dependency1, partial_dependency2, partial_dependency3, ncol = 3)
+```
+
+
+## Random Forests
+
+```{r, class.source = "fold-show"}
+# number of features
+n_features <- length(setdiff(names(d_train), "present"))
+
+# fit a default random forest model
+mdl_rf <- ranger(present ~ ., data = d_train)
+
+# get out of the box RMSE
+(default_rmse <- sqrt(mdl_rf$prediction.error))
+```
+
+### Variable importance plot
+
+```{r}
+# re-run model with impurity-based variable importance
+mdl_impurity <- ranger(present ~ ., 
+                       data = d_train,
+                       importance = "impurity")
+
+# re-run model with permutation-based variable importance
+mdl_permutation <- ranger(present ~ ., 
+                          data = d_train,
+                          importance = "permutation")
+
+p_impurity <- vip::vip(mdl_impurity, bar = FALSE)
+p_permutation <- vip::vip(mdl_permutation, bar = FALSE)
+
+gridExtra::grid.arrange(p_impurity, p_permutation, nrow = 1)
+```
+
+
+## Questions
+**Question 6**: It is recommended that we use a tree of size 5.\
+**Question 7**: The top three most important variables for my model are: latitude, annual mean temperature (WC_bio1), and altitude (WC_alt).\
+**Question 8**: In the permutations importance plot for the RandomForest model the most important variables are longitude, latitude, and mean annual temperature (WC_bio1). This is different from the Rpart model, where the important variables were latitude, mean annual temperature (WC_bio1), and altitude (WC_alt). 
+
+
+
+# Evaluate Models
+
+**Split observations into training and testing**
+
+```{r, class.source = "fold-show"}
+pts <- read_sf(pts_geo)
+
+# create training set with 80% of full data
+pts_split  <- rsample::initial_split(pts, 
+                                     prop = 0.8, 
+                                     strata = "present")
+pts_train  <- rsample::training(pts_split)
+pts_test   <- rsample::testing(pts_split)
+
+pts_train_p <- pts_train %>% 
+  filter(present == 1) %>% 
+  as_Spatial()
+
+pts_train_a <- pts_train %>% 
+  filter(present == 0) %>% 
+  as_Spatial()
+```
+
+## Calibrate variable selection
+
+### Pairs plot of full environmental stack
+
+```{r}
+# show pairs plot before multicollinearity reduction with vifcor()
+pairs(env_stack)
+```
+
+### Calculate VIF per variable
+
+```{r, class.source = "fold-show"}
+# calculate variance inflation factor (VIF) per predictor, a metric of multicollinearity between variables
+vif(env_stack)
+```
+
+### Variables after VIF collinearity removal
+
+```{r, class.source = "fold-show"}
+# stepwise reduce predictors, based on a max correlation of 0.7 (max 1)
+v <- vifcor(env_stack, th = 0.7) 
+v
+```
+
+### Pair plots after VIF collinearity in environmental stack removed
+
+```{r}
+# reduce enviromental raster stack by 
+env_stack_v <- usdm::exclude(env_stack, v)
+
+# show pairs plot after multicollinearity reduction with vifcor()
+pairs(env_stack_v)
+```
+
+### Variable contribution plot
+
+```{r}
+# fit a maximum entropy model
+if (!file.exists(mdl_maxv_rds) | redo){
+  mdl_maxv <- maxent(env_stack_v, sf::as_Spatial(pts_train))
+  readr::write_rds(mdl_maxv, mdl_maxv_rds)
+}
+mdl_maxv <- read_rds(mdl_maxv_rds, sf::as_Spatial(pts_train))
+
+# plot variable contributions per predictor
+plot(mdl_maxv)
+```
+
+### Maxent term plots
+
+```{r}
+# plot term plots
+response(mdl_maxv)
+```
+
+### Maxent term predictions map
+
+```{r}
+# predict
+y_maxv <- predict(env_stack, mdl_maxv)
+
+plot(y_maxv, main = 'Maxent, raw prediction')
+data(wrld_simpl, package = "maptools")
+plot(wrld_simpl, add = TRUE, border = 'dark grey')
+```
+
+## Evaluate model performance
+
+### ROC threshold value maximizing specificity and sensitivity
+
+**Reciever Operater Characteristic (ROC) Curve**
+
+```{r}
+pts_test_p <- pts_test %>% 
+  filter(present == 1) %>% 
+  as_Spatial()
+pts_test_a <- pts_test %>% 
+  filter(present == 0) %>% 
+  as_Spatial()
+
+y_maxv <- predict(mdl_maxv, env_stack)
+#plot(y_maxv)
+
+e <- dismo::evaluate(
+  p     = pts_test_p,
+  a     = pts_test_a, 
+  model = mdl_maxv,
+  x     = env_stack)
+e
+```
+
+```{r}
+plot(e, 'ROC')
+thr <- threshold(e)[['spec_sens']]
+thr
+```
+
+### Confusion matrix
+
+```{r}
+p_true <- na.omit(raster::extract(y_maxv, pts_test_p) >= thr)
+a_true <- na.omit(raster::extract(y_maxv, pts_test_a) < thr)
+
+# (t)rue/(f)alse (p)ositive/(n)egative rates
+tpr <- sum(p_true)/length(p_true)
+fnr <- sum(!p_true)/length(p_true)
+fpr <- sum(!a_true)/length(a_true)
+tnr <- sum(a_true)/length(a_true)
+
+matrix(
+  c(tpr, fnr,
+    fpr, tnr), 
+  nrow = 2, dimnames = list(
+    c("present_obs", "absent_obs"),
+    c("present_pred", "absent_pred")))
+```
+
+### AUC plot
+
+**Area Under the Curve (AUC)**
+
+```{r}
+plot(e, 'ROC')
+
+# add point to ROC plot
+points(fpr, tpr, pch = 23, bg = "blue") ## BREAKS HERE
+```
+
+## Map of binary habitat
+
+```{r}
+plot(y_maxv > thr)
+```
+
+## Questions
+**Question 9**: No variables were removed due to multicollinearity as the highest correllation between variables is 0.6 for mean diurnal temperature range (WC_bio2) and annual precipiation (WC_bio12). The variables ranked in importance from most to least are:\
+  - Annual mean temperature (WC_bio1)\
+  - Altitude (WC_alt)\
+  - Annual precipitation (WC_bio12)\
+  - Terrain roughness (ER_tri)\
+  - Mean Diurnal temperature range (WC_bio2)
+
+
+
+

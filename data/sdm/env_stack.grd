@@ -1,6 +1,6 @@
 [general]
 creator=R package 'raster'
-created=2022-01-07 17:05:33
+created=2022-01-26 02:12:33
 [georeference]
 nrows=624
 ncols=905
@@ -14,12 +14,12 @@ datatype=FLT4S
 byteorder=little
 nbands=5
 bandorder=BIL
-minvalue=-187:-6.5:3.40000009536743:0:6.55999994277954
-maxvalue=4094:29.2999992370605:21.2999992370605:346.670013427734:15.3100004196167
-nodatavalue=-3.4e+38
+minvalue=-187:-6.5:3.40000009536743:0:47
+maxvalue=4094:29.2999992370605:21.2999992370605:346.670013427734:5800
+nodatavalue=-339999999999999996123846586046231871488
 [legend]
 legendtype=
 values=
 color=
 [description]
-layername=WC_alt:WC_bio1:WC_bio2:ER_tri:ER_topoWet
+layername=WC_alt:WC_bio1:WC_bio2:ER_tri:WC_bio12
