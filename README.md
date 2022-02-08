@@ -1,2 +1,2 @@
-# species-distribution-model
-EDS 232: Machine Learning - Lab 1: Species Distribution Modeling
+# Species Distribution Model
+This project looks at the species distribution of the red-tailed hawk (*Buteo jamaicensis*). This model was created as part of a lab for EDS232: Machine Learning and coveres various supervised learing methods (including GLMs, GAMs, Decision Trees (rpart and RandomForest), and Maxent) and model calibration methods (including AIC, ROC, and confusion matrices) to accurately predict species distribution.
